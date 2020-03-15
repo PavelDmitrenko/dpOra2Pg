@@ -1,7 +1,10 @@
 # dpOra2Pg
 Oracle to PostgreSQL converter
 
+* Direct data import into PostgreSQL using `BINARY COPY` without intermediate steps and temporary files;
 * No Oracle client required;
 * No Postgres installation required;
 * No Oracle DBA permissions required;
-* Direct batch data copy to PG without intermediate steps.
+
+## Dependencies
++ .NET Core 3.1
