@@ -1,5 +1,5 @@
 # dpOra2Pg
-Oracle to PostgreSQL converter
+### Oracle to a PostgreSQL converter
 
 * Direct data import into PostgreSQL using `BINARY COPY` without intermediate steps and temporary files;
 * No Oracle client required;
