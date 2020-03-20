@@ -1,0 +1,18 @@
+{
+	"Oracle": {
+		"Host": "127.0.0.1",
+		"Port": 1521,
+		"Service": "service",
+		"Schema": "schema",
+		"UserID": "userid",
+		"Password": "password"
+	},
+	"Postgres": {
+		"Host": "127.0.0.1",
+		"Port": 5432,
+		"Database": "db",
+		"UserID": "userid",
+		"Password": "password",
+		"Schema": "public"
+	}
+}

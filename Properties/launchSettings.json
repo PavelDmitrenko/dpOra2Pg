@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "dpOra2Pg": {
+      "commandName": "Project",
+      "commandLineArgs": "SampleConfig"
+    }
+  }
+}
