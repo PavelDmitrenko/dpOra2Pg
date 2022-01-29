@@ -29,6 +29,12 @@
 		"Database": "db",
 		"UserID": "userid",
 		"Password": "password",
-		"Schema": "public"
+		"Schema": "public",
+		"SSLMode": "Require",
+		"TrustServerCertificate": "true"
+	},
+	"Settings": {
+		"CreateTempTables": true
 	}
-}```
+}
+```
