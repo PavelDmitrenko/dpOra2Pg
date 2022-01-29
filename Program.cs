@@ -4,25 +4,23 @@ using System.Threading.Tasks;
 
 namespace dpOra2Pg
 {
+    public class Program
+    {
+        static async Task Main(string[] args)
+        {
+            if (!args.Any())
+            {
+                Console.WriteLine("No config file supplied. Exiting.");
+                return;
+            }
 
-	class Program
-	{
-		static async Task Main(string[] args)
-		{
+            SettingsController sc = new SettingsController(args[0]);
 
-			if (!args.Any())
-			{
-				Console.WriteLine("No config file supplied. Exiting.");
-				return;
-			}
+            Transition transition = new Transition(sc.Settings);
+            await transition.ExecuteTransition();
 
-			SettingsController sc = new SettingsController(args[0]);
+            Console.ReadLine();
+        }
 
-			Transition transition = new Transition(sc.Settings);
-			await transition.GetOraStructure();
-
-			Console.ReadLine();
-		}
-
-	}
+    }
 }

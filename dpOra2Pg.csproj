@@ -17,13 +17,20 @@
   <ItemGroup>
     <None Remove=".gitignore" />
     <None Remove="Oracle\slq.sql" />
+    <None Remove="Postgres\SQL\Table.sql" />
+    <None Remove="Postgres\SQL\TableColumn.sql" />
   </ItemGroup>
   <ItemGroup>
+    <EmbeddedResource Include="Oracle\SQL\Sequence.sql" />
+    <EmbeddedResource Include="Oracle\SQL\ConstraintColumn.sql" />
+    <EmbeddedResource Include="Oracle\SQL\Constraint.sql" />
     <EmbeddedResource Include="Oracle\SQL\IndexColumn.sql" />
     <EmbeddedResource Include="Oracle\SQL\Index.sql" />
     <EmbeddedResource Include="Oracle\SQL\TableColumn.sql" />
     <EmbeddedResource Include="Oracle\SQL\TableColumnComment.sql" />
     <EmbeddedResource Include="Oracle\SQL\Table.sql" />
+    <EmbeddedResource Include="Postgres\SQL\TableColumn.sql" />
+    <EmbeddedResource Include="Postgres\SQL\Table.sql" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="AutoMapper" Version="9.0.0" />

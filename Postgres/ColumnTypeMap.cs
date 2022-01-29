@@ -5,6 +5,46 @@ namespace dpOra2Pg
 {
 	public static class ColumnTypeMap
 	{
+        public static Tuple<NpgsqlDbType, string> ToPostgres(PGTableColumnBase column)
+        {
+            switch (column.udt_name.ToLower())
+            {
+                case "int8":
+                    return new Tuple<NpgsqlDbType, string>(NpgsqlDbType.Bigint, $"int8");
+
+                case "int4":
+                    return new Tuple<NpgsqlDbType, string>(NpgsqlDbType.Smallint, $"int4");
+
+				case "int2":
+                    return new Tuple<NpgsqlDbType, string>(NpgsqlDbType.Smallint, $"int2");
+
+                case "numeric":
+                    return new Tuple<NpgsqlDbType, string>(NpgsqlDbType.Numeric, $"numeric({column.numeric_precision},{column.numeric_scale})");
+
+				case "varchar":
+					return new Tuple<NpgsqlDbType, string>(NpgsqlDbType.Varchar, $"varchar({column.character_octet_length})");
+
+                case "date":
+                    return new Tuple<NpgsqlDbType, string>(NpgsqlDbType.Date, $"date");
+
+				case "timestamp":
+                    return new Tuple<NpgsqlDbType, string>(NpgsqlDbType.Timestamp, $"timestamp");
+
+				case "bpchar":
+                    return new Tuple<NpgsqlDbType, string>(NpgsqlDbType.Char, $"char({column.CharacterMaximumLength})");
+
+                case "text":
+                    return new Tuple<NpgsqlDbType, string>(NpgsqlDbType.Text, $"text");
+
+
+                case "bytea":
+                    return new Tuple<NpgsqlDbType, string>(NpgsqlDbType.Bytea, $"bytea");
+
+				default:
+                    throw new ArgumentOutOfRangeException(column.DataType);
+            }
+        }
+
 		public static Tuple<NpgsqlDbType, string> ToPostgres(OraTableColumn column)
 		{
 			switch (column.DataType.ToUpper())
@@ -19,6 +59,7 @@ namespace dpOra2Pg
 					return new Tuple<NpgsqlDbType, string>(NpgsqlDbType.Integer, "int");
 
 				case "NUMBER" when column.DataScale == 0 && column.DataPrecision > 9  && column.DataPrecision <= 18:
+				case "LONG":
 					return new Tuple<NpgsqlDbType, string>(NpgsqlDbType.Bigint, "bigint");
 
 				case "NUMBER" when column.DataScale == 0 && column.DataPrecision > 18:
@@ -41,6 +82,7 @@ namespace dpOra2Pg
 					return new Tuple<NpgsqlDbType, string>(NpgsqlDbType.Text, $"text");
 
 				case "BLOB":
+                case "RAW":
 					return new Tuple<NpgsqlDbType, string>(NpgsqlDbType.Bytea, $"bytea");
 
 				default:

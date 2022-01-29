@@ -2,10 +2,7 @@
 using System.Collections.Generic;
 using System.Data;
 using System.Diagnostics;
-using System.IO;
 using System.Linq;
-using System.Reflection;
-using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using Dapper;
 using Npgsql;
@@ -13,174 +10,177 @@ using Oracle.ManagedDataAccess.Client;
 
 namespace dpOra2Pg
 {
-	public class Transition
-	{
+    public class Transition
+    {
+        private static Stopwatch stopwatch;
+        private static long _rowsProcessed;
+        private readonly SettingsModel _settings;
+        private readonly OraStructureReader _oracle;
+        private readonly PGStructureReader _postres;
+        private OraStructure _oraStructure;
+        private PGStructure _pgCurrentStructure;
 
-		private static bool _counterInitialized;
-		private static Stopwatch stopwatch;
-		private static long _rowsProcessed;
-		private readonly SettingsModel _settings;
+        #region ctor
+        public Transition(SettingsModel settings)
+        {
+            _settings = settings;
+            _oracle = new OraStructureReader(_settings);
+            _postres = new PGStructureReader(_settings);
+        }
+        #endregion
 
-		public Transition(SettingsModel settings)
-		{
-			_settings = settings;
-		}
+        #region ExecuteTransition
+        public async Task ExecuteTransition()
+        {
+            _oraStructure = await _oracle.GetStructure();
+            _pgCurrentStructure = await _postres.GetStructure();
 
-		public async Task GetOraStructure()
-		{
+            stopwatch = new Stopwatch();
+            stopwatch.Start();
+            _rowsProcessed = 0;
 
-			stopwatch = new Stopwatch();
-			stopwatch.Start();
-			_rowsProcessed = 0;
+            DefaultTypeMap.MatchNamesWithUnderscores = true;
 
-			DefaultTypeMap.MatchNamesWithUnderscores = true;
-			PgStructure ts = new PgStructure();
-			
-			using (OracleConnection oraConnection = new OracleConnection(_settings.Oracle.ConnectionString))
-			{
-				Console.Write("Opening Oracle connection...");
-				await oraConnection.OpenAsync();
-				Console.WriteLine("done");
+            PGStructure pgStructure = new PGStructure();
+            pgStructure.MapFromOracle(_settings, _oraStructure);
 
-				Console.Write("Getting Oracle structure...");
-				string sqlTable = _ReadSqlFromResource("Table.sql");
-				string sqlTableColumn = _ReadSqlFromResource("TableColumn.sql");
-				string sqlTableColumnComments = _ReadSqlFromResource("TableColumnComment.sql");
-				string indexSql = _ReadSqlFromResource("Index.sql");
-				string indexColumnSql = _ReadSqlFromResource("IndexColumn.sql");
+            await using (NpgsqlConnection pgConnection = new NpgsqlConnection(_settings.Postgres.ConnectionString))
+            {
+                Console.WriteLine("Opening Postgres connection...");
+                await pgConnection.OpenAsync();
 
-				var tableDefinitions = oraConnection.Query<OraTable>(sqlTable, new { owner = _settings.Oracle.UserID }).ToList();
-				var tableColumnDefinitions = oraConnection.Query<OraTableColumn>(sqlTableColumn, new { owner = _settings.Oracle.UserID }).ToList();
-				var tableColumnCommentDefinitions = oraConnection.Query<OraTableColumnComment>(sqlTableColumnComments, new { owner = _settings.Oracle.UserID }).ToList();
-				List<OraIndex> indexDefinition = oraConnection.Query<OraIndex>(indexSql, new { owner = _settings.Oracle.UserID }).ToList();
-				List<OraIndexColumn> indexColumnDefinition = oraConnection.Query<OraIndexColumn>(indexColumnSql, new { owner = _settings.Oracle.UserID }).ToList();
-				
-				Console.WriteLine("done");
+                Console.WriteLine("Transferring structure and data...");
+                await using OracleConnection oraConnection = new OracleConnection(_settings.Oracle.ConnectionString);
+                await oraConnection.OpenAsync();
 
-				ts.ToPostgresSchema(_settings.Postgres, tableDefinitions, tableColumnDefinitions, tableColumnCommentDefinitions, indexDefinition, indexColumnDefinition);
-				
-				using (NpgsqlConnection pgConnection = new NpgsqlConnection(_settings.Postgres.ConnectionString))
-				{
-					Console.Write("Opening Postgres connection...");
-					await pgConnection.OpenAsync();
-					Console.WriteLine("done");
+                await using (NpgsqlTransaction pgTransaction = await pgConnection.BeginTransactionAsync(IsolationLevel.ReadCommitted))
+                {
+                    foreach (PGTable table in pgStructure.Tables.OrderBy(x => x.TableName))
+                        await CreateTable(oraConnection, pgConnection, pgStructure, table);
 
-					Console.WriteLine("Transferring structure and data...");
-					using (NpgsqlTransaction pgTransaction = pgConnection.BeginTransaction(IsolationLevel.ReadCommitted))
-					{
-						foreach (PgTable table in ts.Tables)
-						{
-							await AddTable(oraConnection, pgConnection, ts, table.TableName);
-						}
+                    await CreateSequences(pgConnection, pgStructure);
 
-						Console.Write("Commiting transaction...");
-						await pgTransaction.CommitAsync();
-						Console.WriteLine("done");
-					}
-				}
-			}
+                    Console.WriteLine("Commiting transaction...");
+                    await pgTransaction.CommitAsync();
+                }
+            }
 
-			Console.WriteLine("Done.");
-			Console.WriteLine($"Rows processed: {_rowsProcessed}");
-			Console.WriteLine($"Elapsed: {stopwatch.Elapsed:mm\\:ss\\.ff}");
+            Console.WriteLine("Done");
+            Console.WriteLine($"Rows processed: {_rowsProcessed}");
+            Console.WriteLine($"Elapsed: {stopwatch.Elapsed:mm\\:ss\\.ff}");
 
-			stopwatch.Stop();
-			stopwatch.Reset();
+            stopwatch.Stop();
+            stopwatch.Reset();
+        }
+        #endregion
 
-		}
+        #region MyRegion
+        public async Task CreateSequences(NpgsqlConnection dbPgConn, PGStructure pgStructure)
+        {
+            string ddlSequences = pgStructure.Sequences.DDL();
+            if (!string.IsNullOrEmpty(ddlSequences))
+            {
+                Console.WriteLine("Applying Sequences...");
+                await dbPgConn.ExecuteAsync(ddlSequences);
+            }
+        } 
+        #endregion
 
-		public async Task AddTable(OracleConnection dbOraConn, NpgsqlConnection dbPgConn, PgStructure ts, string tableName)
-		{
-			PgTable tableData = ts.Tables.First(x => x.TableName.Equals(tableName, StringComparison.InvariantCultureIgnoreCase));
+        #region CreateTable
+        public async Task CreateTable(OracleConnection dbOraConn, NpgsqlConnection dbPgConn, PGStructure ts, PGTable table)
+        {
+            PGTable newTable = ts.Tables.First(x => x.TableName.Equals(table.TableName, StringComparison.InvariantCultureIgnoreCase));
+            PGTable existingTable = _pgCurrentStructure.Tables.FirstOrDefault(x => x.TableName == table.TableName);
+            OraTable oracleTable = _oraStructure.Table.First(x => x.TableName.Equals(table.TableName, StringComparison.InvariantCultureIgnoreCase));
+            List<OraTableColumn> oraColumns = _oraStructure.TableColumn.Where(x => x.TableName.Equals(oracleTable.TableName)).OrderBy(x => x.ColumnId).ToList();
+            string oraColumnsStr = string.Join(',', oraColumns.Select(x => $"\"{x.ColumnName}\""));
 
-			string ddlColumns = tableData.DDLColumns();
-			dbPgConn.Execute(ddlColumns);
+            bool createStructure = false;
 
-			Console.ForegroundColor = ConsoleColor.Cyan;
-			Console.WriteLine($"{tableData.TableName.ToUpper()}");
-			Console.ResetColor();
+            if (existingTable == null) // TODO Additioanl equality checks
+            {
+                createStructure = true;
+                string ddlColumns = newTable.DDLTable();
+                await dbPgConn.ExecuteAsync(ddlColumns);
+            }
 
-			int countTable = 0;
-			int countConsoleStats = 0;
+            Console.ForegroundColor = ConsoleColor.Cyan;
+            Console.WriteLine($"{newTable.TableName.ToUpper()}");
+            Console.ResetColor();
 
-			string command = $"SELECT {tableData.OraColumnsList()} FROM {tableData.TableName}";
+            int countTable = 0;
+            int countConsoleStats = 0;
+            string command = $"SELECT {oraColumnsStr} FROM \"{_settings.Oracle.Schema}\".\"{oracleTable.TableName}\"";
+            //command = "select * from  ( SELECT \"GRN_RECORD_ID\",\"OGRNIP\",\"REG_DATE\",\"INN\",\"SURNAME\",\"NAME\",\"PATRONYMIC\",\"REGION_ID\",\"AREA_ID\",\"CITY_ID\",\"SETTLEMENT_ID\",\"TERM_DATE\" FROM \"EGRUL\".\"GRN_RECORD_ACTUAL_OGRNIP\") where ROWNUM <= 1000";
 
-			using (OracleCommand oraCommand = new OracleCommand(command, dbOraConn))
-			{
-				oraCommand.InitialLOBFetchSize = -1; // https://community.oracle.com/thread/4119841
+            long rowsAwaited = _oraStructure.Table.First(x => x.TableName.Equals(table.TableName, StringComparison.InvariantCultureIgnoreCase)).NumRows;
 
-				using (NpgsqlBinaryImporter pgWriter = dbPgConn.BeginBinaryImport($"COPY {_settings.Postgres.Schema}.{tableData.TableName} ({tableData.ColumnsList()}) FROM STDIN (FORMAT BINARY)"))
-				{
-					using (IDataReader oraReader = await oraCommand.ExecuteReaderAsync(CommandBehavior.SingleResult))
-					{
-						while (oraReader.Read())
-						{
-							pgWriter.StartRow();
+            await dbPgConn.ExecuteAsync($"DELETE FROM {_settings.Postgres.Schema}.\"{newTable.TableName}\"");
 
-							foreach (PgColumn column in tableData.Columns)
-								await pgWriter.WriteAsync(oraReader[column.OrderIndex - 1], column.DbType);
+            await using (OracleCommand oraCommand = new OracleCommand(command, dbOraConn))
+            {
+                oraCommand.InitialLOBFetchSize = -1; // https://community.oracle.com/thread/4119841
 
-							if (countConsoleStats == 1000)
-							{
-								_ConsoleWriteStats(countTable);
-								countConsoleStats = 0;
-							}
+                string binaryImportCommand = $"COPY {_settings.Postgres.Schema}.\"{newTable.TableName}\" ({newTable.ColumnsList()}) FROM STDIN (FORMAT BINARY)";
 
-							_rowsProcessed++;
-							countConsoleStats++;
-							countTable++;
-						}
-					}
+                await using (NpgsqlBinaryImporter pgWriter = dbPgConn.BeginBinaryImport(binaryImportCommand))
+                {
+                    using (IDataReader oraReader = await oraCommand.ExecuteReaderAsync(CommandBehavior.SingleResult))
+                    {
+                        while (oraReader.Read())
+                        {
+                            await pgWriter.StartRowAsync();
 
-					await pgWriter.CompleteAsync();
-				}
-			}
+                            foreach (PGColumn column in newTable.Columns)
+                                await pgWriter.WriteAsync(oraReader[column.OrdinalPosition - 1], column.DbType);
 
-			_ConsoleWriteStats(countTable, true);
+                            if (countConsoleStats == 1000)
+                            {
+                                decimal proc = Math.Round(countTable * 100 / (decimal)rowsAwaited, 2);
+                                Utils.ConsoleWriteStats($"{countTable} ({proc}%)");
+                                countConsoleStats = 0;
+                            }
 
-			Console.Write("Applying indexes...");
-			string ddlIndexes = tableData.DDLIndexes();
-			dbPgConn.Execute(ddlIndexes);
-			Console.WriteLine("done");
-			Console.WriteLine();
-		}
+                            _rowsProcessed++;
+                            countConsoleStats++;
+                            countTable++;
+                        }
+                    }
 
-		private static string _ReadSqlFromResource(string name)
-		{
-			Assembly assembly = Assembly.GetExecutingAssembly();
-			string resourcePath = name;
+                    await pgWriter.CompleteAsync();
+                }
+            }
 
-			if (!name.StartsWith(nameof(dpOra2Pg)))
-				resourcePath = assembly.GetManifestResourceNames().Single(str => str.EndsWith(name));
+            Utils.ConsoleWriteStats(countTable.ToString(), true);
 
-			using Stream stream = assembly.GetManifestResourceStream(resourcePath);
-			using StreamReader reader = new StreamReader(stream);
-			return reader.ReadToEnd().Replace("@", ":");
-		}
+            if (createStructure)
+            {
+                string ddlPK = newTable.PrimaryKey?.DDL();
+                if (!string.IsNullOrEmpty(ddlPK))
+                {
+                    Console.WriteLine("Adding PrimaryKey...");
+                    await dbPgConn.ExecuteAsync(ddlPK);
+                }
 
-		private static void _ConsoleWriteStats(int c, bool final = false)
-		{
-			if (_counterInitialized) // Dont erase on first iteration
-				Console.Write(new string('\b', (c - 1).ToString().Length));
-			else
-			{
-				_counterInitialized = true;
-				if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-					Console.CursorVisible = false;
-			}
+                string ddlIndexes = newTable.Indexes.DDL();
+                if (!string.IsNullOrEmpty(ddlIndexes))
+                {
+                    Console.WriteLine("Applying Indexes...");
+                    await dbPgConn.ExecuteAsync(ddlIndexes);
+                }
 
-			Console.Write(c);
+                string ddlUniqueKeys = newTable.UniqueKeys.DDL();
+                if (!string.IsNullOrEmpty(ddlUniqueKeys))
+                {
+                    Console.WriteLine("Applying Unique Keys...");
+                    await dbPgConn.ExecuteAsync(ddlUniqueKeys);
+                }
+            }
 
-			if (final)
-			{
-				Console.WriteLine();
-				_counterInitialized = false;
-				if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-					Console.CursorVisible = true;
-			}
+            Console.WriteLine("done");
+            Console.WriteLine();
+        }
+        #endregion
 
-			Console.ResetColor();
-		}
-
-	}
+    }
 }

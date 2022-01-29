@@ -3,17 +3,28 @@ using NpgsqlTypes;
 
 namespace dpOra2Pg
 {
-	public class PgColumn
+	public class PGColumn
 	{
 		public string Name { get; set; }
 		public string Comment { get; set; }
-		public int OrderIndex { get; set; }
+		public int OrdinalPosition { get; set; }
 		public string Type { get; set; }
 		public NpgsqlDbType DbType { get; set; }
-	
-	
+         
+        public PGColumn(PGTableColumnBase baseColumn)
+        {
+            Name = baseColumn.ColumnName.ToLower();
+            (NpgsqlDbType dbType, string type) = ColumnTypeMap.ToPostgres(baseColumn);
 
-		public PgColumn(OraTableColumn column, string columnComments)
+			//(NpgsqlDbType dbType, string type) = ColumnTypeMap.ToPostgres(column);
+			//DbType = dbType;
+			//Type = type;
+
+			OrdinalPosition = baseColumn.OrdinalPosition;
+            //Comment = baseColumn.com;
+        }
+
+		public PGColumn(OraTableColumn column, string columnComments)
 		{
 			Name = column.ColumnName.ToLower();
 			
@@ -21,7 +32,7 @@ namespace dpOra2Pg
 			DbType = dbType;
 			Type = type;
 
-			OrderIndex = column.ColumnId;
+			OrdinalPosition = column.ColumnId;
 			Comment = columnComments;
 
 		}

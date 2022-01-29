@@ -1,97 +1,104 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 
 namespace dpOra2Pg
 {
-	public class PgTable
-	{
-		public string TableName { get; }
-		public List<PgColumn> Columns { get; }
-		public List<PgIndex> Indexes { get; }
-		private readonly SettingsPostgres _pgSettings;
+    public class PGTable
+    {
+        public string TableName { get; }
+        public List<PGColumn> Columns { get; }
+        public PGIndexes Indexes { get; }
+        public PGPrimaryKey PrimaryKey { get; }
+        public PGUniqueKeys UniqueKeys { get;  }
 
-		private PgTable(SettingsPostgres pgSettings)
-		{
-			Columns = new List<PgColumn>();
-			Indexes = new List<PgIndex>();
-			_pgSettings = pgSettings;
-		}
+        private readonly string _schema;
+        private readonly string _userId;
+        private PGTable(string schema, string userId)
+        {
+            Columns = new List<PGColumn>();
+            _schema = schema;
+            _userId = userId;
+        }
 
-		public PgTable(SettingsPostgres pgSettings,
-						OraTable table,
-						ILookup<string, OraTableColumn> columns,
-						ILookup<string, OraTableColumnComment> columnComments,
-						ILookup<string, OraIndex> indexLookup,
-						ILookup<string, OraIndexColumn> indexColumnLookup) : this(pgSettings)
-		{
-			TableName = table.TableName.ToLower();
-		
-			foreach (OraTableColumn column in columns[table.TableName].OrderBy(x => x.ColumnId))
-			{
-				string comment = columnComments[table.TableName].FirstOrDefault(x => x.ColumnName == column.ColumnName)?.Comments;
-				Columns.Add(new PgColumn(column, comment));
-			}
+        public PGTable(PGTableBase baseTable, List<PGTableColumnBase> columns) 
+        {
+            TableName = baseTable.TableName;
+            Columns = new List<PGColumn>();
 
-			foreach (OraIndex oraIndex in indexLookup[table.TableName])
-			{
-				Indexes.Add(new PgIndex(oraIndex, indexColumnLookup[table.TableName].ToList()));
-			}
-		}
+            foreach (PGTableColumnBase baseColumn in columns)
+            {
+                PGColumn column = new PGColumn(baseColumn);
+                Columns.Add(column);
+            }
+        }
 
-		public string OraColumnsList()
-		{
-			return string.Join(',', Columns.Select(x => $"\"{x.Name.ToUpper()}\""));
-		}
-		
-		public string ColumnsList()
-		{
-			return string.Join(',', Columns.Select(x => x.Name));
-		}
+        public PGTable(string schema, 
+                        string userId,
+                        string constraintPrefix,
+                        OraTable table,
+                        List<OraTableColumn> columns,
+                        List<OraTableColumnComment> columnComments,
+                        List<OraIndex> indexes,
+                        List<OraIndexColumn> indexColumns,
+                        List<OraConstraint> constraints,
+                        List<OraConstraintColumn> constraintsColumns) : this(schema, userId)
+        {
+            TableName = table.TableName.ToLower();
 
-		public string DDLColumns()
-		{
-			StringBuilder sbTable = new StringBuilder();
-			StringBuilder sbColumns = new StringBuilder();
+            foreach (OraTableColumn column in columns)
+            {
+                string comment = columnComments.FirstOrDefault(x => x.ColumnName == column.ColumnName)?.Comments;
+                Columns.Add(new PGColumn(column, comment));
+            }
 
-			foreach (PgColumn column in Columns)
-				sbColumns.AppendFormat("{0} {1}, ", column.Name, column.Type);
+            // PK
+            OraConstraint pkConstraint = constraints.FirstOrDefault(x => x.IndexOwner?.ToUpper() == schema.ToUpper() && x.ConstraintType == OraConstraintType.PrimaryKey);
+            if (pkConstraint != null)
+                PrimaryKey = new PGPrimaryKey(TableName, _schema, pkConstraint, constraintsColumns, constraintPrefix);
 
-			string ddlColumns = sbColumns.ToString().Trim(' ', ',');
+            // Indexes
+            Indexes = new PGIndexes(TableName, _schema, indexes, indexColumns, constraints, constraintPrefix);
 
-			string drop = $"DROP TABLE IF EXISTS {_pgSettings.Schema}.{TableName};";
-			string create = $"CREATE TABLE {_pgSettings.Schema}.{TableName}({ddlColumns});";
-			string setOwner = $"ALTER TABLE {_pgSettings.Schema}.{TableName} OWNER to {_pgSettings.UserID};";
+            // UniqueKeys
+            UniqueKeys = new PGUniqueKeys(TableName, _schema, constraints, constraintsColumns, constraintPrefix);
+        }
 
-			sbTable.Append(drop);
-			sbTable.Append(create);
-			sbTable.Append(setOwner);
+        public string ColumnsList()
+        {
+            return string.Join(',', Columns.Select(x => x.Name));
+        }
 
-			return sbTable.ToString();
-		}
+        #region DDLTable
+        public string DDLTable()
+        {
+            StringBuilder sbTable = new StringBuilder();
+            StringBuilder sbColumns = new StringBuilder();
 
-		public string DDLIndexes()
-		{
-			StringBuilder sbIndexes = new StringBuilder();
-			foreach (PgIndex index in Indexes)
-			{
-				string unique = index.IsUnique ? "UNIQUE" : null;
-				sbIndexes.AppendLine($"CREATE {unique} INDEX {index.Name}");
-				sbIndexes.AppendLine($"ON {_pgSettings.Schema}.{TableName} USING btree");
-				sbIndexes.Append("(");
+            foreach (PGColumn column in Columns)
+            {
+                // TODO Reserved List
+                if (column.Name.Equals("session_user", StringComparison.InvariantCultureIgnoreCase))
+                    column.Name += "_1";
 
-				StringBuilder sbColumns = new StringBuilder();
-				foreach (PgIndexColumn column in index.Columns.OrderBy(x => x.ColumnIndex))
-					sbColumns.Append($"{column.ColumnName} {column.SortOrder} NULLS LAST,");
-				
-				sbIndexes.Append(sbColumns.ToString().Trim(','));
-				sbIndexes.Append(")");
-				sbIndexes.AppendLine("TABLESPACE pg_default;");
-			}
-			
-			return sbIndexes.ToString();
+                sbColumns.AppendFormat("{0} {1}, ", column.Name, column.Type);
+            }
 
-		}
-	}
+            string ddlColumns = sbColumns.ToString().Trim(' ', ',');
+
+            string drop = $"DROP TABLE IF EXISTS {_schema}.{TableName};";
+            string create = $"CREATE TABLE {_schema}.{TableName}({ddlColumns});";
+            string setOwner = $"ALTER TABLE {_schema}.{TableName} OWNER to {_userId};";
+
+            sbTable.Append(drop);
+            sbTable.Append(create);
+            sbTable.Append(setOwner);
+
+            return sbTable.ToString();
+        }
+        #endregion
+
+    }
 
 }
